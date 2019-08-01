@@ -15,6 +15,7 @@ import pickle as pkl
 import argparse
 from math import ceil
 import paho.mqtt.client as mqtt
+import os
 
 def get_test_input(input_dim, CUDA):
     img = cv2.imread("dog-cycle-car.png")
@@ -43,15 +44,18 @@ def prep_image(img, inp_dim):
     img_ = torch.from_numpy(img_).float().div(255.0).unsqueeze(0)
     return img_, orig_im, dim
 
+
 def write(x, img, classes, point):
-    c1 = tuple(x[1:3].int())
-    c2 = tuple(x[3:5].int())
     cls = int(x[-1])
     if classes[cls]=='person':
+        c1 = tuple(x[1:3].int())
+        c2 = tuple(x[3:5].int())
         color = (0,0,150)
         cv2.rectangle(img, c1, c2,color, 1)
         #Add coordinates to the list
-        point.append({"x":int(ceil(c2[0].item()+c1[0].item()/2)),"y":int(c2[1].item())})
+        if c1[0].item() == c2[0].item() and c1[1].item() == c2[1].item():
+            return img
+        point.append({"x":int(ceil(c2[0].item()+c1[0].item())/2),"y":int(c2[1].item())})
     return img
 
 def arg_parse():
@@ -89,12 +93,14 @@ def on_message(client, userdata, msg):
 class Camera(BaseCamera):
     """An emulated camera implementation that streams a repeated sequence of files."""
 
+
     @staticmethod
     def frames():
-        client = mqtt.Client()
+        #使用EMQ实现前后端之间的消息（坐标，时间）传输
+        client = mqtt.Client(client_id="davidwu")
         client.on_connect = on_connect
         client.on_message = on_message
-        client.connect("127.0.0.1", 1883)
+        client.connect("10.2.2.41", 1883)
         client.loop_start()
         result, mid = client.subscribe("hello", 0)
 
@@ -103,11 +109,10 @@ class Camera(BaseCamera):
         nms_thesh = float(args.nms_thresh)
         start = 0
 
+        #检测是否可以使用GPU，如果可以后面将会用GPU运算以加速计算过程
         CUDA = torch.cuda.is_available()
 
         num_classes = 80
-
-        CUDA = torch.cuda.is_available()
         
         bbox_attrs = 5 + num_classes
         
@@ -128,6 +133,7 @@ class Camera(BaseCamera):
 
         model.eval()
         
+        #载入视频
         videofile = args.video
         
         cap = cv2.VideoCapture(videofile)
@@ -137,21 +143,19 @@ class Camera(BaseCamera):
         frames = 0
         start = time.time() 
         classes = load_classes('data/coco.names')
-
+        
         while cap.isOpened():
-
+            #每一次循环都是识别当前帧的图像的人像并且返回坐标
             point=[]
             cap.set(1,frames)
             ret, frame = cap.read(frames)
             if ret:
                 
-
-                img, orig_im, dim = prep_image(frame, inp_dim)
+                img, orig_im, dim = prep_image(frame, inp_dim)            
                 
-                im_dim = torch.FloatTensor(dim).repeat(1,2)                        
-                
-                
+                #调用GPU
                 if CUDA:
+                    im_dim = torch.cuda.FloatTensor(dim).repeat(1,2)            
                     im_dim = im_dim.cuda()
                     img = img.cuda()
                 
@@ -172,11 +176,15 @@ class Camera(BaseCamera):
                     output[i, [2,4]] = torch.clamp(output[i, [2,4]], 0.0, im_dim[i,1])
                 
                 list(map(lambda x: write(x, orig_im, classes, point), output))
+                orig_im=cv2.resize(orig_im,(960,540))
                 ret, jpeg=cv2.imencode(".jpg", orig_im)
                 yield jpeg.tobytes()
                 time_now=time.time()-start 
                 frames = int(30*time_now)
-                mydict = str(point)[0:-1]+',{"time":'+str(time_now)+'}]'
+                point.append({"time":time_now})
+                mydict = str(point)
                 client.publish("hello", payload = mydict)
+                #time.sleep(0.01)
             else:
-                break
+                time.sleep(5)
+                os._exit(0)
