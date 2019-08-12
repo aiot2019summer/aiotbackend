@@ -1,0 +1,6 @@
+opencv
+pandas
+pytorch torchvision cudatoolkit=10.0 -c pytorch
+paho.mqtt
+flask
+matplotlib

@@ -9,7 +9,7 @@ from darknet import Darknet
 from preprocess import prep_image, inp_to_image, letterbox_image
 import argparse
 from math import ceil
-import pymongo
+
 
 
 def get_test_input(input_dim, CUDA):
